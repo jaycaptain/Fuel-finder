@@ -13,7 +13,7 @@ import type {
   TransactionReceipt,
   WalletClient,
 } from 'viem';
-import { decodeEventLog } from 'viem';
+import { decodeEventLog, isAddressEqual } from 'viem';
 import { erc20Abi } from 'viem';
 
 import { relayCommonMessage } from '../../fuel/utils/relayMessage';
@@ -24,7 +24,7 @@ import {
   FUEL_MESSAGE_PORTAL,
   decodeMessageSentData,
 } from '../contracts/FuelMessagePortal';
-import { getBlockDate, isErc20Address } from '../utils';
+import { getBlockDate, getTransactionReceipt, isErc20Address } from '../utils';
 
 import {
   type HexAddress,
@@ -51,6 +51,7 @@ export type TxEthToFuelInputs = {
   };
   getReceiptsInfo: {
     ethTxId?: HexAddress;
+    inputEthTxNonce?: BigInt;
     ethPublicClient?: PublicClient;
   };
   getFuelMessage: {
@@ -77,6 +78,7 @@ export type GetReceiptsInfoReturn = {
     address: HexAddress;
     decimals: number;
   };
+  receiptErc20Address?: HexAddress;
   amount?: BN;
   sender?: string;
   recipient?: FuelAddress;
@@ -124,8 +126,8 @@ export class TxEthToFuelService {
     TxEthToFuelService.assertStartEth(input);
 
     try {
-      const { ethWalletClient, fuelAddress, amount } = input;
-      if (fuelAddress && ethWalletClient) {
+      const { ethWalletClient, fuelAddress, amount, ethPublicClient } = input;
+      if (fuelAddress && ethWalletClient && ethPublicClient) {
         const bridgeSolidityContracts = await getBridgeSolidityContracts();
         const fuelPortal = EthConnectorService.connectToFuelMessagePortal({
           walletClient: ethWalletClient,
@@ -140,7 +142,34 @@ export class TxEthToFuelService {
           },
         );
 
-        return txHash;
+        const receipt = await getTransactionReceipt({
+          ethPublicClient,
+          txHash,
+        });
+
+        if (receipt.status !== 'success') {
+          throw new Error('Failed to deposit ETH');
+        }
+
+        const nonce = receipt.logs.map((log) => {
+          try {
+            const messageSentEvent = decodeEventLog({
+              abi: FUEL_MESSAGE_PORTAL.abi,
+              data: log.data,
+              topics: log.topics,
+            }) as unknown as { args: FuelMessagePortalArgs['MessageSent'] };
+
+            return messageSentEvent?.args?.nonce;
+          } catch (_) {
+            /* empty */
+          }
+        })[0];
+
+        if (nonce == null) {
+          throw new Error('Failed to get nonce of ETH deposit');
+        }
+
+        return { txHash, nonce };
       }
     } catch (e) {
       // biome-ignore lint/suspicious/noExplicitAny: <explanation>
@@ -183,19 +212,11 @@ export class TxEthToFuelService {
           amount,
         ]);
 
-        let approveTxHashReceipt: TransactionReceipt;
-        try {
-          approveTxHashReceipt = await ethPublicClient.getTransactionReceipt({
-            hash: approveTxHash,
-          });
-        } catch (_err: unknown) {
-          // workaround in place because waitForTransactionReceipt stop working after first time using it
-          approveTxHashReceipt =
-            await ethPublicClient.waitForTransactionReceipt({
-              hash: approveTxHash,
-              confirmations: 2,
-            });
-        }
+        const approveTxHashReceipt = await getTransactionReceipt({
+          ethPublicClient,
+          txHash: approveTxHash,
+          waitOptions: { confirmations: 2 },
+        });
 
         if (approveTxHashReceipt.status !== 'success') {
           throw new Error('Failed to approve Token for transfer');
@@ -211,7 +232,34 @@ export class TxEthToFuelService {
           amount,
         ]);
 
-        return depositTxHash;
+        const receipt = await getTransactionReceipt({
+          ethPublicClient,
+          txHash: depositTxHash,
+        });
+
+        if (receipt.status !== 'success') {
+          throw new Error('Failed to deposit ETH');
+        }
+
+        const nonce = receipt.logs.map((log) => {
+          try {
+            const messageSentEvent = decodeEventLog({
+              abi: FUEL_MESSAGE_PORTAL.abi,
+              data: log.data,
+              topics: log.topics,
+            }) as unknown as { args: FuelMessagePortalArgs['MessageSent'] };
+
+            return messageSentEvent?.args?.nonce;
+          } catch (_) {
+            /* empty */
+          }
+        })[0];
+
+        if (!nonce) {
+          throw new Error('Failed to get nonce of ETH deposit');
+        }
+
+        return { txHash: depositTxHash, nonce };
       }
     } catch (e) {
       // biome-ignore lint/suspicious/noExplicitAny: <explanation>
@@ -235,7 +283,7 @@ export class TxEthToFuelService {
       throw new Error('No eth Provider');
     }
 
-    const { ethTxId, ethPublicClient } = input;
+    const { ethTxId, ethPublicClient, inputEthTxNonce } = input;
 
     let receipt: TransactionReceipt;
     try {
@@ -272,15 +320,21 @@ export class TxEthToFuelService {
           topics: receipt.logs[i].topics,
         }) as unknown as { args: FuelMessagePortalArgs['MessageSent'] };
 
-        const { amount, sender, nonce, recipient } = messageSentEvent.args;
+        const { amount, sender, nonce, recipient, data } =
+          messageSentEvent.args;
 
-        receiptsInfo = {
-          ...receiptsInfo,
-          nonce: bn(nonce.toString()),
-          amount: bn(amount.toString()),
-          sender,
-          recipient: FuelAddress.fromB256(recipient),
-        };
+        if (inputEthTxNonce === nonce) {
+          const { tokenAddress } = decodeMessageSentData.erc20Deposit(data);
+
+          receiptsInfo = {
+            ...receiptsInfo,
+            nonce: bn(nonce.toString()),
+            amount: bn(amount.toString()),
+            sender,
+            recipient: FuelAddress.fromB256(recipient),
+            receiptErc20Address: tokenAddress as HexAddress,
+          };
+        }
       } catch (_) {
         /* empty */
       }
@@ -296,7 +350,15 @@ export class TxEthToFuelService {
           topics: receipt.logs[i].topics,
         }) as unknown as { args: FuelERC20GatewayArgs['Deposit'] };
 
-        if (isErc20Address(depositEvent.args.tokenAddress)) {
+        // search for a deposit log that matches the ERC-20 token address of the messageSent event
+        if (
+          isErc20Address(depositEvent.args.tokenAddress) &&
+          isAddressEqual(
+            depositEvent.args.tokenAddress,
+            // we can convert "as HexAddress" safely because we validated if it's not undefined before
+            receiptsInfo.receiptErc20Address as HexAddress,
+          )
+        ) {
           const { amount, tokenAddress } = depositEvent.args;
           const decimals = (await input.ethPublicClient.readContract({
             address: tokenAddress,

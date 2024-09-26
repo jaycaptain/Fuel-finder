@@ -55,9 +55,17 @@ test.describe('Bridge', () => {
       transport: http(),
     });
 
+    await page.bringToFront();
     await page.goto('/bridge');
+    await page.waitForTimeout(3000);
+    await page.reload();
   });
   test('e2e', async ({ page, context }) => {
+    function log(message: string) {
+      test.info().annotations.push({ type: 'info', description: message });
+    }
+
+    log('Starting the test');
     await test.step('Connect to Fuel', async () => {
       await connectToFuel(page, fuelWalletTestHelper, [
         'Account 2',
@@ -65,6 +73,7 @@ test.describe('Bridge', () => {
       ]);
     });
 
+    log('Connect to metamask');
     await test.step('Connect to metamask', async () => {
       await connectToMetamask(page);
     });
@@ -89,7 +98,9 @@ test.describe('Bridge', () => {
     });
     const baseAssetId = fuelWallet.provider.getBaseAssetId();
 
+    log('Fuel wallet should be connected after refresh');
     await test.step('Fuel wallet should be connected after refresh', async () => {
+      console.log('asd 1');
       await goToBridgePage(page);
 
       const connectedWallet = getByAriaLabel(
@@ -97,11 +108,14 @@ test.describe('Bridge', () => {
         'Fuel Local: Connected Wallet',
       );
       const address = await connectedWallet.innerText();
+      console.log('asd 2');
       const balance = getByAriaLabel(page, 'Balance');
       const balanceText = await balance.innerText();
+      console.log('asd 3');
 
       // refresh the page
       await page.goto('/bridge');
+      console.log('asd 4');
 
       const connectedWalletAferRefresh = getByAriaLabel(
         page,
@@ -111,17 +125,24 @@ test.describe('Bridge', () => {
       const balanceAfterRefresh = getByAriaLabel(page, 'Balance');
       const balanceTextAfterRefresh = await balanceAfterRefresh.innerText();
 
+      console.log('asd 5');
+
       expect(addressAfterRefresh).toEqual(address);
       expect(balanceTextAfterRefresh).toEqual(balanceText);
+
+      console.log('asd 6');
     });
 
+    log('Deposit ETH to Fuel');
     await test.step('Deposit ETH to Fuel', async () => {
+      console.log('asd 7');
       const preDepositBalanceFuel = await fuelWallet.getBalance(baseAssetId);
       const prevDepositBalanceEth = await client.getBalance({
         address: account.address,
       });
 
       await test.step('Fill data and click on deposit', async () => {
+        console.log('asd 71');
         await hasDropdownSymbol(page, 'ETH');
         const depositInput = page.locator('.fuel-InputAmountField input');
         await depositInput.fill(DEPOSIT_AMOUNT);
@@ -130,12 +151,14 @@ test.describe('Bridge', () => {
       });
 
       await test.step('Approve transaction on Metamask', async () => {
+        console.log('asd 72');
         // Timeout needed until https://github.com/Synthetixio/synpress/issues/795 is fixed
         await page.waitForTimeout(2000);
         await metamask.confirmTransaction();
       });
 
       await test.step('Check if deposit is completed', async () => {
+        console.log('asd 73');
         await page.locator(':nth-match(:text("Done"), 1)').waitFor();
         await page.locator(':nth-match(:text("Done"), 3)').waitFor();
 
@@ -160,6 +183,7 @@ test.describe('Bridge', () => {
       });
 
       await test.step('Check deposit tx in the Tx list', async () => {
+        console.log('asd 74');
         await closeTransactionPopup(page);
 
         const postDepositBalanceFuel = await fuelWallet.getBalance(baseAssetId);
@@ -190,7 +214,9 @@ test.describe('Bridge', () => {
       });
     });
 
+    log('Withdraw ETH from Fuel');
     await test.step('Withdraw ETH from Fuel', async () => {
+      console.log('asd 8');
       const preWithdrawBalanceFuel = await fuelWallet.getBalance(baseAssetId);
       const prevWithdrawBalanceEth = await client.getBalance({
         address: account.address,
@@ -301,7 +327,9 @@ test.describe('Bridge', () => {
       });
     });
 
+    log('Faucet TKN');
     await test.step('Faucet TKN', async () => {
+      console.log('asd 9');
       const preFaucetBalance = (await erc20Contract.read.balanceOf([
         account.address,
       ])) as BigNumberish;
@@ -348,7 +376,9 @@ test.describe('Bridge', () => {
       );
     });
 
+    log('Deposit TKN to Fuel');
     await test.step('Deposit TKN to Fuel', async () => {
+      console.log('asd 10');
       await clickDepositTab(page);
       const preDepositBalanceFuel =
         await fuelWallet.getBalance(FUEL_TokenAsset);
@@ -459,7 +489,9 @@ test.describe('Bridge', () => {
       });
     });
 
+    log('Withdraw TKN from Fuel to ETH');
     await test.step('Withdraw TKN from Fuel to ETH', async () => {
+      console.log('asd 11');
       const preWithdrawBalanceFuel =
         await fuelWallet.getBalance(FUEL_TokenAsset);
       const preWithdrawBalanceEth = await erc20Contract.read.balanceOf([
@@ -575,7 +607,9 @@ test.describe('Bridge', () => {
       });
     });
 
+    log('Transaction list should show correct after refresh the page');
     await test.step('Transaction list should show correct after refresh the page', async () => {
+      console.log('asd 12');
       await page.goto('/bridge');
       await goToTransactionsPage(page);
 
@@ -586,6 +620,7 @@ test.describe('Bridge', () => {
     });
 
     await test.step('Check if transaction list reacts correctly to fuel wallet changes', async () => {
+      console.log('asd 13');
       await goToTransactionsPage(page);
 
       await test.step('Change to account 2 should show empty feedback', async () => {
@@ -621,6 +656,7 @@ test.describe('Bridge', () => {
     });
 
     await test.step('Deposit TKN before Fuel wallet has ETH', async () => {
+      console.log('asd 14');
       await fuelWalletTestHelper.switchAccount('Account 4');
       await goToBridgePage(page);
       await clickDepositTab(page);

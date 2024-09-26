@@ -12,18 +12,22 @@ const config: PlaywrightTestConfig = defineConfig({
   expect: {
     timeout: 5000,
   },
-  reporter: [
-    ['list', { printSteps: true }],
-    ['html', { outputFolder: join(__dirname, './playwright-html/hard/') }],
-  ],
+  reporter: process.env.CI
+    ? [['list', { printSteps: true }]]
+    : [
+        ['list', { printSteps: true }],
+        ['html', { outputFolder: join(__dirname, './playwright-html/hard/') }],
+        ['github'],
+      ],
   // Fail the build on CI if left test.only in the source code
   forbidOnly: !!process.env.CI,
   retries: 0,
   webServer: {
-    command: 'pnpm dev',
+    command: 'pnpm dev:explorer',
     port: Number(PORT),
     reuseExistingServer: true,
     cwd: join(__dirname, '../../'),
+    stdout: 'pipe',
   },
   use: {
     baseURL: `http://127.0.0.1:${PORT}/`,
